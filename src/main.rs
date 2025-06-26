@@ -1,11 +1,12 @@
 use gtk::prelude::*;
 use gtk::{glib, Application, ApplicationWindow, Box, Button, HeaderBar, ListBox, ListBoxRow, 
-          Orientation, Paned, ScrolledWindow, Label, Entry, Switch, SpinButton, Adjustment};
+          Orientation, Paned, ScrolledWindow, Label, Entry, Switch, SpinButton, Adjustment, Image};
 use std::process::Command;
 use std::env;
 use std::fs;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::SystemTime;
 
 const APP_ID: &str = "org.ummitos.settings";
 
@@ -97,7 +98,7 @@ fn create_sidebar(content_stack: &gtk::Stack) -> ScrolledWindow {
             .build();
 
         // Create icon
-        let icon = gtk::Image::builder()
+        let icon = Image::builder()
             .icon_name(icon_name)
             .icon_size(gtk::IconSize::Normal)
             .build();
@@ -254,7 +255,7 @@ fn create_recording_section() -> Box {
     let dir_entry = Entry::builder()
         .text(&default_dir)
         .hexpand(true)
-        .width_chars(30) // Limit width
+        .width_chars(30)
         .max_width_chars(40)
         .build();
 
@@ -341,7 +342,7 @@ fn create_recording_section() -> Box {
     // Stop recording button
     let stop_btn = Button::builder()
         .label("Stop Recording")
-        .sensitive(false) // Initially disabled
+        .sensitive(false)
         .build();
 
     // Open recordings folder button
@@ -408,7 +409,366 @@ fn create_recording_section() -> Box {
     buttons_box.append(&open_folder_btn);
 
     section_box.append(&buttons_box);
+
+    let file_list_section = create_file_list_section(&current_path);
+    section_box.append(&file_list_section);
+
     section_box
+}
+
+fn create_file_list_section(current_path: &Rc<RefCell<String>>) -> gtk::Expander {
+    let expander = gtk::Expander::builder()
+        .label("Recording Files")
+        .margin_top(16)
+        .build();
+
+    // Content container
+    let content_box = Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .margin_top(8)
+        .build();
+
+    // Header with refresh button
+    let header_box = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_bottom(8)
+        .build();
+
+    // Header with icon and text
+    let header_content = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .hexpand(true)
+        .build();
+
+    let header_icon = Image::builder()
+        .icon_name("folder-videos-symbolic")
+        .icon_size(gtk::IconSize::Normal)
+        .build();
+
+    let files_label = Label::builder()
+        .label("Available recording files:")
+        .halign(gtk::Align::Start)
+        .build();
+
+    let refresh_btn = Button::builder()
+        .icon_name("view-refresh-symbolic")
+        .tooltip_text("Refresh file list")
+        .build();
+
+    header_content.append(&header_icon);
+    header_content.append(&files_label);
+    header_box.append(&header_content);
+    header_box.append(&refresh_btn);
+    content_box.append(&header_box);
+
+    // Scrollable area for file list
+    let scrolled = ScrolledWindow::builder()
+        .height_request(200)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .build();
+
+    let files_listbox = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+
+    scrolled.set_child(Some(&files_listbox));
+    content_box.append(&scrolled);
+
+    // Function to refresh file list
+    let refresh_files = {
+        let current_path_clone = current_path.clone();
+        let files_listbox_clone = files_listbox.clone();
+        
+        Rc::new(move || {
+            // Clear existing items
+            while let Some(child) = files_listbox_clone.first_child() {
+                files_listbox_clone.remove(&child);
+            }
+
+            let recording_dir = current_path_clone.borrow().clone();
+            let files = list_recording_files(&recording_dir);
+
+            if files.is_empty() {
+                // Show empty state
+                let empty_row = create_empty_file_row();
+                files_listbox_clone.append(&empty_row);
+            } else {
+                // Add file rows with refresh callback (we'll pass a dummy callback for now)
+                for file_info in files {
+                    let file_row = create_file_row(file_info, &recording_dir);
+                    files_listbox_clone.append(&file_row);
+                }
+            }
+        })
+    };
+
+    // Connect refresh button
+    {
+        let refresh_files_clone = refresh_files.clone();
+        refresh_btn.connect_clicked(move |_| {
+            refresh_files_clone();
+        });
+    }
+
+    // Auto-refresh when expander is opened
+    {
+        let refresh_files_clone = refresh_files.clone();
+        expander.connect_expanded_notify(move |expander| {
+            if expander.is_expanded() {
+                refresh_files_clone();
+            }
+        });
+    }
+
+    {
+        let refresh_files_clone = refresh_files.clone();
+        let expander_clone = expander.clone();
+        
+        glib::timeout_add_seconds_local(1, move || {
+            if expander_clone.is_expanded() {
+                refresh_files_clone();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    // Initial load
+    refresh_files();
+
+    expander.set_child(Some(&content_box));
+    expander
+}
+
+// File information structure
+#[derive(Debug, Clone)]
+struct FileInfo {
+    name: String,
+    size: String,
+    modified: String,
+}
+
+// List recording files in directory
+fn list_recording_files(recording_dir: &str) -> Vec<FileInfo> {
+    use std::fs;
+    use std::time::SystemTime;
+    
+    let mut files = Vec::new();
+    
+    if let Ok(entries) = fs::read_dir(recording_dir) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    
+                    // Only include video files
+                    if file_name.ends_with(".mp4") || 
+                       file_name.ends_with(".mkv") || 
+                       file_name.ends_with(".webm") ||
+                       file_name.contains("wf-recorder") {
+                        
+                        let size = format_file_size(metadata.len());
+                        let modified = format_modified_time(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+                        
+                        files.push(FileInfo {
+                            name: file_name,
+                            size,
+                            modified,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    
+    // Sort by modification time (newest first)
+    files.sort_by(|a, b| b.modified.cmp(&a.modified));
+    files
+}
+
+// Create a file row widget (keeping original implementation)
+fn create_file_row(file_info: FileInfo, recording_dir: &str) -> Box {
+    let row_box = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_start(4)
+        .margin_end(4)
+        .margin_top(2)
+        .margin_bottom(2)
+        .build();
+
+    // File icon
+    let file_icon = Image::builder()
+        .icon_name("video-x-generic-symbolic")
+        .icon_size(gtk::IconSize::Large)
+        .build();
+
+    // File info container
+    let info_box = Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+
+    // File name (truncated if too long)
+    let display_name = if file_info.name.len() > 40 {
+        format!("{}...", &file_info.name[..37])
+    } else {
+        file_info.name.clone()
+    };
+
+    let name_label = Label::builder()
+        .label(&format!("<b>{}</b>", glib::markup_escape_text(&display_name)))
+        .use_markup(true)
+        .halign(gtk::Align::Start)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
+
+    let details_label = Label::builder()
+        .label(&format!("{} • {}", file_info.size, file_info.modified))
+        .halign(gtk::Align::Start)
+        .build();
+    
+    details_label.add_css_class("dim-label");
+
+    info_box.append(&name_label);
+    info_box.append(&details_label);
+
+    // Action buttons
+    let actions_box = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(4)
+        .build();
+
+    let play_btn = Button::builder()
+        .icon_name("media-playback-start-symbolic")
+        .tooltip_text("Play video")
+        .build();
+
+    let delete_btn = Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Delete file")
+        .build();
+
+    // Connect play button
+    {
+        let file_path = format!("{}/{}", recording_dir, file_info.name);
+        play_btn.connect_clicked(move |_| {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&file_path)
+                .spawn();
+        });
+    }
+
+    // Connect delete button
+    {
+        let file_path = format!("{}/{}", recording_dir, file_info.name);
+        let file_name = file_info.name.clone();
+        delete_btn.connect_clicked(move |_| {
+            show_delete_confirmation(&file_path, &file_name);
+        });
+    }
+
+    actions_box.append(&play_btn);
+    actions_box.append(&delete_btn);
+
+    row_box.append(&file_icon);
+    row_box.append(&info_box);
+    row_box.append(&actions_box);
+
+    row_box
+}
+
+// Create empty state row
+fn create_empty_file_row() -> Box {
+    let row_box = Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(8)
+        .margin_top(20)
+        .margin_bottom(20)
+        .halign(gtk::Align::Center)
+        .build();
+
+    let empty_icon = Image::builder()
+        .icon_name("folder-videos-symbolic")
+        .icon_size(gtk::IconSize::Large)
+        .build();
+    empty_icon.add_css_class("dim-icon");
+
+    let empty_label = Label::builder()
+        .label("No recording files found")
+        .build();
+    empty_label.add_css_class("dim-label");
+
+    let hint_label = Label::builder()
+        .label("Start recording to see files here")
+        .build();
+    hint_label.add_css_class("dim-label");
+
+    row_box.append(&empty_icon);
+    row_box.append(&empty_label);
+    row_box.append(&hint_label);
+
+    row_box
+}
+
+// Format file size
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    
+    if unit_index == 0 {
+        format!("{} {}", bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
+    }
+}
+
+// Format modification time
+fn format_modified_time(system_time: SystemTime) -> String {
+    use chrono::{DateTime, Local};
+    
+    let datetime: DateTime<Local> = system_time.into();
+    datetime.format("%Y-%m-%d %H:%M").to_string()
+}
+
+// Show delete confirmation dialog
+fn show_delete_confirmation(file_path: &str, file_name: &str) {
+    use std::fs;
+    
+    // Simple confirmation via dialog
+    let confirmation = std::process::Command::new("zenity")
+        .args(&[
+            "--question",
+            "--text",
+            &format!("Are you sure you want to delete '{}'?\n\nThis action cannot be undone.", file_name),
+            "--title",
+            "Delete Recording File"
+        ])
+        .status();
+    
+    if let Ok(status) = confirmation {
+        if status.success() {
+            // User confirmed deletion
+            match fs::remove_file(file_path) {
+                Ok(_) => {
+                    println!("Deleted file: {} (Auto-refresh will update list within 3 seconds)", file_path);
+                },
+                Err(e) => {
+                    eprintln!("Failed to delete file {}: {}", file_path, e);
+                }
+            }
+        }
+    }
 }
 
 fn create_about_section() -> Box {

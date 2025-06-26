@@ -4,8 +4,9 @@ A GTK4-based settings application for UmmItOS, built with Rust. This application
 
 ## Building
 
+Run our script to build ummit-settings.
+
 ```bash
-# Clone the repository
 git clone https://github.com/UmmItOS/ummit-settings
 ./build.sh
 ```

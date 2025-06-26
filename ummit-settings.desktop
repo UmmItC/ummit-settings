@@ -1,0 +1,17 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=UmmItOS Settings
+Comment=Settings application for UmmItOS
+Exec=ummit-settings
+Icon=preferences-system
+Terminal=false
+Categories=System;Settings;
+Keywords=settings;preferences;configuration;system;dotfiles;
+StartupNotify=true
+MimeType=
+Actions=
+
+[Desktop Action preferences]
+Name=Open Settings
+Exec=ummit-settings 

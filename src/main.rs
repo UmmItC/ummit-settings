@@ -238,10 +238,64 @@ fn create_recording_section() -> Box {
     let dir_entry = Entry::builder()
         .text(&default_dir)
         .hexpand(true)
+        .width_chars(30) // Limit width
+        .max_width_chars(40)
         .build();
+
+    // Buttons container
+    let buttons_container = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(4)
+        .build();
+
+    // Path validation button with checkmark icon
+    let validate_btn = Button::builder()
+        .icon_name("emblem-ok-symbolic")
+        .tooltip_text("Validate directory path")
+        .build();
+
+    // Apply button to save the path
+    let apply_btn = Button::builder()
+        .icon_name("document-save-symbolic")
+        .tooltip_text("Apply this directory path")
+        .build();
+
+    // Add CSS classes for styling
+    validate_btn.add_css_class("suggested-action");
+    apply_btn.add_css_class("accent");
+
+    // Current applied path (shared state)
+    let current_path = Rc::new(RefCell::new(default_dir.clone()));
+
+    // Connect validation logic
+    {
+        let dir_entry_clone = dir_entry.clone();
+        let validate_btn_clone = validate_btn.clone();
+        
+        validate_btn.connect_clicked(move |_| {
+            let path = dir_entry_clone.text().to_string();
+            validate_directory_path(&path, &validate_btn_clone);
+        });
+    }
+
+    // Connect apply logic
+    {
+        let dir_entry_clone = dir_entry.clone();
+        let current_path_clone = current_path.clone();
+        let apply_btn_clone = apply_btn.clone();
+        
+        apply_btn.connect_clicked(move |_| {
+            let path = dir_entry_clone.text().to_string();
+            apply_directory_path(&path, &current_path_clone, &apply_btn_clone);
+        });
+    }
+
+    buttons_container.append(&validate_btn);
+    buttons_container.append(&apply_btn);
 
     dir_row.append(&dir_label);
     dir_row.append(&dir_entry);
+    dir_row.append(&buttons_container);
     section_box.append(&dir_row);
 
     // Recording status
@@ -282,7 +336,7 @@ fn create_recording_section() -> Box {
     // Connect start button
     {
         let status_label_clone = status_label.clone();
-        let dir_entry_clone = dir_entry.clone();
+        let current_path_clone = current_path.clone();
         let is_recording_clone = is_recording.clone();
         let start_btn_clone = start_btn.clone();
         let stop_btn_clone = stop_btn.clone();
@@ -293,7 +347,7 @@ fn create_recording_section() -> Box {
                 return;
             }
             
-            let recording_dir = dir_entry_clone.text().to_string();
+            let recording_dir = current_path_clone.borrow().clone();
             if start_recording(&recording_dir, &status_label_clone) {
                 *is_recording_clone.borrow_mut() = true;
                 start_btn_clone.set_sensitive(false);
@@ -305,7 +359,7 @@ fn create_recording_section() -> Box {
     // Connect stop button
     {
         let status_label_clone = status_label.clone();
-        let dir_entry_clone = dir_entry.clone();
+        let current_path_clone = current_path.clone();
         let is_recording_clone = is_recording.clone();
         let start_btn_clone = start_btn.clone();
         let stop_btn_clone = stop_btn.clone();
@@ -316,7 +370,7 @@ fn create_recording_section() -> Box {
                 return;
             }
             
-            let recording_dir = dir_entry_clone.text().to_string();
+            let recording_dir = current_path_clone.borrow().clone();
             stop_recording(&recording_dir, &status_label_clone);
             *is_recording_clone.borrow_mut() = false;
             start_btn_clone.set_sensitive(true);
@@ -326,9 +380,9 @@ fn create_recording_section() -> Box {
 
     // Connect open folder button
     {
-        let dir_entry_clone = dir_entry.clone();
+        let current_path_clone = current_path.clone();
         open_folder_btn.connect_clicked(move |_| {
-            let recording_dir = dir_entry_clone.text().to_string();
+            let recording_dir = current_path_clone.borrow().clone();
             open_recordings_folder(&recording_dir);
         });
     }
@@ -587,6 +641,92 @@ fn stop_recording(recording_dir: &str, status_label: &Label) {
         Err(e) => {
             println!("Error finding wf-recorder process: {}", e);
             status_label.set_text("Error: Could not find wf-recorder process");
+        }
+    }
+}
+
+fn apply_directory_path(path: &str, current_path: &Rc<RefCell<String>>, button: &Button) {
+    println!("Applying directory path: {}", path);
+    
+    // First validate the path
+    match fs::create_dir_all(path) {
+        Ok(_) => {
+            // Path is valid, apply it
+            *current_path.borrow_mut() = path.to_string();
+            
+            button.set_icon_name("emblem-ok-symbolic");
+            button.set_tooltip_text(Some("Directory path applied successfully"));
+            button.add_css_class("success");
+            button.remove_css_class("destructive-action");
+            
+            // Send success notification
+            let _ = Command::new("hyprctl")
+                .arg("notify")
+                .arg("2")
+                .arg("3000")
+                .arg("rgb(00FF00)")
+                .arg(&format!("fontsize:35 Applied recording directory: {}", path))
+                .spawn();
+                
+            println!("Recording directory applied: {}", path);
+        }
+        Err(e) => {
+            // Path is invalid, can't apply
+            println!("Cannot apply invalid path: {}", e);
+            button.set_icon_name("dialog-error-symbolic");
+            button.set_tooltip_text(Some(&format!("Cannot apply invalid path: {}", e)));
+            button.remove_css_class("success");
+            button.add_css_class("destructive-action");
+            
+            // Send error notification
+            let _ = Command::new("hyprctl")
+                .arg("notify")
+                .arg("0")
+                .arg("3000")
+                .arg("rgb(FF0000)")
+                .arg(&format!("fontsize:35 Cannot apply invalid path: {}", e))
+                .spawn();
+        }
+    }
+}
+
+fn validate_directory_path(path: &str, button: &Button) {
+    println!("Validating directory path: {}", path);
+    
+    // Check if path is valid and can be created
+    match fs::create_dir_all(path) {
+        Ok(_) => {
+            // Path is valid and directory exists/was created
+            button.set_icon_name("emblem-ok-symbolic");
+            button.set_tooltip_text(Some("Directory path is valid"));
+            button.add_css_class("suggested-action");
+            button.remove_css_class("destructive-action");
+            
+            // Send success notification
+            let _ = Command::new("hyprctl")
+                .arg("notify")
+                .arg("2")
+                .arg("3000")
+                .arg("rgb(00FF00)")
+                .arg(&format!("fontsize:35 Directory validated: {}", path))
+                .spawn();
+        }
+        Err(e) => {
+            // Path is invalid
+            println!("Directory validation failed: {}", e);
+            button.set_icon_name("dialog-error-symbolic");
+            button.set_tooltip_text(Some(&format!("Invalid path: {}", e)));
+            button.remove_css_class("suggested-action");
+            button.add_css_class("destructive-action");
+            
+            // Send error notification
+            let _ = Command::new("hyprctl")
+                .arg("notify")
+                .arg("0")
+                .arg("3000")
+                .arg("rgb(FF0000)")
+                .arg(&format!("Invalid directory path: {}", e))
+                .spawn();
         }
     }
 }

@@ -1,6 +1,7 @@
 use gtk::prelude::*;
 use gtk::{glib, Application, ApplicationWindow, Box, Button, HeaderBar, ListBox, ListBoxRow, 
-          Orientation, Paned, ScrolledWindow, Label, Entry, Switch, SpinButton, Adjustment, Image};
+          Orientation, Paned, ScrolledWindow, Label, Entry, Switch, SpinButton, Adjustment, Image, 
+          MessageDialog, MessageType, ButtonsType, ResponseType};
 use std::process::Command;
 use std::env;
 use std::fs;
@@ -10,7 +11,63 @@ use std::time::SystemTime;
 
 const APP_ID: &str = "org.ummitos.settings";
 
+// UmmItOS Detection
+fn check_system_requirements() -> bool {
+
+    // Initialize GTK for dialogs
+    gtk::init().expect("Failed to initialize GTK");
+    
+    // Check Arch Linux or not. just check if pacman exists
+    if !std::path::Path::new("/etc/pacman.conf").exists() {
+        show_error_dialog_gtk("System Requirement Error", 
+            "This application is designed for UmmItOS only.\n\nUmmItOS is required to run this application.");
+        return false;
+    }
+    
+    // Check Hyprland, check env var or if hyprctl works
+    if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase().contains("hyprland") 
+        || std::process::Command::new("hyprctl").arg("version").output().map(|o| o.status.success()).unwrap_or(false) {
+        println!("UmmItOS + Hyprland detected - Starting application...");
+        return true;
+    }
+    
+    show_error_dialog_gtk("Window Manager Error", 
+        "This application requires Hyprland window manager.\n\nPlease start Hyprland or run this within a Hyprland session.");
+    false
+}
+
+// Show GTK error dialog
+fn show_error_dialog_gtk(title: &str, message: &str) {
+    let dialog = MessageDialog::builder()
+        .message_type(MessageType::Error)
+        .buttons(ButtonsType::Ok)
+        .title(title)
+        .text(message)
+        .modal(true)
+        .build();
+
+    dialog.set_icon_name(Some("dialog-error"));
+    
+    dialog.connect_response(|dialog, response| {
+        if response == ResponseType::Ok {
+            dialog.close();
+        }
+    });
+    
+    dialog.show();
+    
+    let main_context = glib::MainContext::default();
+    while dialog.is_visible() {
+        main_context.iteration(true);
+    }
+}
+
 fn main() -> glib::ExitCode {
+    // Check system requirements before starting
+    if !check_system_requirements() {
+        return glib::ExitCode::FAILURE;
+    }
+    
     let app = Application::builder().application_id(APP_ID).build();
     
     app.connect_activate(build_ui);

@@ -4,6 +4,8 @@ use gtk::{glib, Application, ApplicationWindow, Box, Button, HeaderBar, ListBox,
 use std::process::Command;
 use std::env;
 use std::fs;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const APP_ID: &str = "org.ummitos.settings";
 
@@ -242,6 +244,18 @@ fn create_recording_section() -> Box {
     dir_row.append(&dir_entry);
     section_box.append(&dir_row);
 
+    // Recording status
+    let status_label = Label::builder()
+        .label("Status: Ready")
+        .halign(gtk::Align::Start)
+        .margin_top(8)
+        .build();
+    
+    section_box.append(&status_label);
+
+    // Recording state - shared between buttons
+    let is_recording = Rc::new(RefCell::new(false));
+
     // Create buttons row
     let buttons_box = Box::builder()
         .orientation(Orientation::Horizontal)
@@ -249,48 +263,75 @@ fn create_recording_section() -> Box {
         .margin_top(12)
         .build();
 
-    // Recording status
-    let status_label = Label::builder()
-        .label("Status: Ready")
-        .halign(gtk::Align::Start)
-        .build();
-    
-    section_box.append(&status_label);
-
     // Start recording button
     let start_btn = Button::builder()
         .label("Start Recording")
         .build();
     
-    let status_label_clone = status_label.clone();
-    let dir_entry_clone = dir_entry.clone();
-    start_btn.connect_clicked(move |_| {
-        let recording_dir = dir_entry_clone.text().to_string();
-        start_recording(&recording_dir, &status_label_clone);
-    });
-
     // Stop recording button
     let stop_btn = Button::builder()
         .label("Stop Recording")
+        .sensitive(false) // Initially disabled
         .build();
-    
-    let status_label_clone2 = status_label.clone();
-    let dir_entry_clone2 = dir_entry.clone();
-    stop_btn.connect_clicked(move |_| {
-        let recording_dir = dir_entry_clone2.text().to_string();
-        stop_recording(&recording_dir, &status_label_clone2);
-    });
 
     // Open recordings folder button
     let open_folder_btn = Button::builder()
         .label("Open Recordings Folder")
         .build();
-    
-    let dir_entry_clone3 = dir_entry.clone();
-    open_folder_btn.connect_clicked(move |_| {
-        let recording_dir = dir_entry_clone3.text().to_string();
-        open_recordings_folder(&recording_dir);
-    });
+
+    // Connect start button
+    {
+        let status_label_clone = status_label.clone();
+        let dir_entry_clone = dir_entry.clone();
+        let is_recording_clone = is_recording.clone();
+        let start_btn_clone = start_btn.clone();
+        let stop_btn_clone = stop_btn.clone();
+        
+        start_btn.connect_clicked(move |_| {
+            if *is_recording_clone.borrow() {
+                status_label_clone.set_text("Error: Recording already in progress");
+                return;
+            }
+            
+            let recording_dir = dir_entry_clone.text().to_string();
+            if start_recording(&recording_dir, &status_label_clone) {
+                *is_recording_clone.borrow_mut() = true;
+                start_btn_clone.set_sensitive(false);
+                stop_btn_clone.set_sensitive(true);
+            }
+        });
+    }
+
+    // Connect stop button
+    {
+        let status_label_clone = status_label.clone();
+        let dir_entry_clone = dir_entry.clone();
+        let is_recording_clone = is_recording.clone();
+        let start_btn_clone = start_btn.clone();
+        let stop_btn_clone = stop_btn.clone();
+        
+        stop_btn.connect_clicked(move |_| {
+            if !*is_recording_clone.borrow() {
+                status_label_clone.set_text("Error: No recording in progress");
+                return;
+            }
+            
+            let recording_dir = dir_entry_clone.text().to_string();
+            stop_recording(&recording_dir, &status_label_clone);
+            *is_recording_clone.borrow_mut() = false;
+            start_btn_clone.set_sensitive(true);
+            stop_btn_clone.set_sensitive(false);
+        });
+    }
+
+    // Connect open folder button
+    {
+        let dir_entry_clone = dir_entry.clone();
+        open_folder_btn.connect_clicked(move |_| {
+            let recording_dir = dir_entry_clone.text().to_string();
+            open_recordings_folder(&recording_dir);
+        });
+    }
 
     buttons_box.append(&start_btn);
     buttons_box.append(&stop_btn);
@@ -420,22 +461,33 @@ fn create_switch() -> Switch {
         .build()
 }
 
-fn start_recording(recording_dir: &str, status_label: &Label) {
+fn start_recording(recording_dir: &str, status_label: &Label) -> bool {
     println!("Starting wf-recorder...");
+    
+    // Check if wf-recorder is already running
+    let check_running = Command::new("pidof")
+        .arg("wf-recorder")
+        .output();
+    
+    if let Ok(output) = check_running {
+        let pid_str = String::from_utf8_lossy(&output.stdout);
+        if !pid_str.trim().is_empty() {
+            println!("wf-recorder is already running with PID: {}", pid_str.trim());
+            status_label.set_text("Error: wf-recorder is already running");
+            return false;
+        }
+    }
     
     // Create recording directory if it doesn't exist
     if let Err(e) = fs::create_dir_all(recording_dir) {
         println!("Error creating directory {}: {}", recording_dir, e);
         status_label.set_text("Error: Failed to create recording directory");
-        return;
+        return false;
     }
 
     // Generate filename with current timestamp
     let timestamp = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S");
     let filename = format!("{}/wf-recorder-{}.mp4", recording_dir, timestamp);
-
-    // Update status immediately
-    status_label.set_text(&format!("Recording to: {}", filename));
 
     // Start wf-recorder
     let result = Command::new("wf-recorder")
@@ -446,6 +498,9 @@ fn start_recording(recording_dir: &str, status_label: &Label) {
 
     match result {
         Ok(_) => {
+            // Update status after successful start
+            status_label.set_text(&format!("Recording to: {}", filename));
+            
             // Send notification via hyprctl
             let _ = Command::new("hyprctl")
                 .arg("notify")
@@ -454,10 +509,13 @@ fn start_recording(recording_dir: &str, status_label: &Label) {
                 .arg("rgb(00FF00)")
                 .arg("fontsize:35   Video recording started with wf-recorder 📹")
                 .spawn();
+            
+            true
         }
         Err(e) => {
             println!("Failed to start wf-recorder: {}", e);
             status_label.set_text("Error: Failed to start wf-recorder");
+            false
         }
     }
 }

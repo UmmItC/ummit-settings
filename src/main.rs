@@ -76,25 +76,41 @@ fn create_sidebar(content_stack: &gtk::Stack) -> ScrolledWindow {
         .selection_mode(gtk::SelectionMode::Single)
         .build();
 
-    // Add sidebar items
+    // Add sidebar items with icons
     let sidebar_items = vec![
-        ("System", "computer"),
-        ("Record", "media-record"),
-        ("About", "help-about"),
+        ("System", "preferences-system-symbolic"),
+        ("Record", "media-record-symbolic"),
+        ("About", "help-about-symbolic"),
     ];
 
-    for (name, _icon) in sidebar_items {
+    for (name, icon_name) in sidebar_items {
         let row = ListBoxRow::new();
-        let label = Label::builder()
-            .label(name)
-            .halign(gtk::Align::Start)
+        
+        // Create a horizontal box for icon + label
+        let item_box = Box::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
             .margin_top(8)
             .margin_bottom(8)
             .margin_start(12)
             .margin_end(12)
             .build();
+
+        // Create icon
+        let icon = gtk::Image::builder()
+            .icon_name(icon_name)
+            .icon_size(gtk::IconSize::Normal)
+            .build();
+
+        // Create label
+        let label = Label::builder()
+            .label(name)
+            .halign(gtk::Align::Start)
+            .build();
         
-        row.set_child(Some(&label));
+        item_box.append(&icon);
+        item_box.append(&label);
+        row.set_child(Some(&item_box));
         listbox.append(&row);
     }
 
